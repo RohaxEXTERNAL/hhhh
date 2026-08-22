@@ -9582,6 +9582,8 @@ function Library:CreateWindow(WindowInfo)
             Tabs.Size = UDim2.new(0, 0, 1, -70)
             DividerLine.Visible = false
 
+            --// Reset the top-right anchor left by the sidebar layout so content sits inside the window \\--
+            Container.AnchorPoint = Vector2.new(0, 0)
             Container.Position = UDim2.fromOffset(0, 49)
             Container.Size = UDim2.new(1, 0, 1, -70)
 
