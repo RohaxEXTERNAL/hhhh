@@ -409,7 +409,11 @@ local Templates = {
 
         TabTransitionTime = 0.22,
         TabSwipeOffset = 26,
-        TabSwipeFrom = "bottom"
+        TabSwipeFrom = "bottom",
+
+        --// Tab Style \\-- ("Sidebar" is the classic Obsidian layout; "Floating" renders a bottom-centered pill bar)
+        TabStyle = "Sidebar",
+        FloatingTabBarOffset = 32,
     },
     Dialog = {
         Title = "Dialog",
@@ -9196,9 +9200,20 @@ function Library:CreateWindow(WindowInfo)
     local FooterLabel
     local TopBar
 
+    local IsFloatingTabs = WindowInfo.TabStyle == "Floating"
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
     local IsCompact = WindowInfo.SidebarCompacted
     local LastExpandedWidth = InitialLeftWidth
+
+    --// Upvalues used by the floating tab bar; assigned below when enabled \\--
+    local FloatingWrap
+    local FloatingBarBg
+    local FloatingBarStroke
+    local FloatingIndicator
+    local FloatingButtonRow
+    local FloatingRowLayout
+    local FloatingBarBaseWidth = 10 -- padding (5) on both sides
+    local FloatingBarHeight = 38
 
     do
         Library.KeybindFrame, Library.KeybindContainer = Library:AddDraggableMenu("Keybinds")
@@ -9549,7 +9564,7 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.new(1, -InitialLeftWidth - 1, 1, -70),
             Parent = MainFrame,
         })
-        New("UIPadding", {
+        local ContainerPadding = New("UIPadding", {
             PaddingBottom = UDim.new(0, 0),
             PaddingLeft = UDim.new(0, 6),
             PaddingRight = UDim.new(0, 6),
@@ -9558,6 +9573,91 @@ function Library:CreateWindow(WindowInfo)
         })
 
         Library.WindowContainer = Container
+
+        if IsFloatingTabs then
+            --// Leave room below the content so groupboxes don't slide behind the pill bar \\--
+            ContainerPadding.PaddingBottom = UDim.new(0, WindowInfo.FloatingTabBarOffset + FloatingBarHeight + 6)
+            --// Reshape the window: hide the sidebar column, widen the content area, drop the divider \\--
+            Tabs.Visible = false
+            Tabs.Size = UDim2.new(0, 0, 1, -70)
+            DividerLine.Visible = false
+
+            Container.Position = UDim2.fromOffset(0, 49)
+            Container.Size = UDim2.new(1, 0, 1, -70)
+
+            --// Floating pill bar (bottom-centered) \\--
+            FloatingWrap = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 1),
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 0,
+                Position = UDim2.new(0.5, 0, 1, -WindowInfo.FloatingTabBarOffset),
+                Size = UDim2.new(0, FloatingBarBaseWidth, 0, FloatingBarHeight),
+                ZIndex = 8,
+                Parent = MainFrame,
+            })
+            FloatingBarBg = FloatingWrap
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = FloatingWrap,
+                })
+            )
+            FloatingBarStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Transparency = 0.35,
+                Thickness = 1,
+                Parent = FloatingWrap,
+            })
+
+            --// Sliding indicator (parented to the wrap so it sits behind the button row) \\--
+            FloatingIndicator = New("Frame", {
+                AnchorPoint = Vector2.new(0, 0.5),
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 0,
+                Position = UDim2.new(0, 5, 0.5, 0),
+                Size = UDim2.new(0, 0, 1, -10),
+                Visible = false,
+                ZIndex = 9,
+                Parent = FloatingWrap,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = FloatingIndicator,
+                })
+            )
+
+            --// Button row (holds all TabButtons — separate frame so the indicator is exempt from layout) \\--
+            FloatingButtonRow = New("Frame", {
+                BackgroundTransparency = 1,
+                Position = UDim2.fromScale(0, 0),
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = 10,
+                Parent = FloatingWrap,
+            })
+            New("UIPadding", {
+                PaddingTop = UDim.new(0, 5),
+                PaddingBottom = UDim.new(0, 5),
+                PaddingLeft = UDim.new(0, 5),
+                PaddingRight = UDim.new(0, 5),
+                Parent = FloatingButtonRow,
+            })
+            FloatingRowLayout = New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Padding = UDim.new(0, 2),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                Parent = FloatingButtonRow,
+            })
+
+            FloatingRowLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                local sz = FloatingRowLayout.AbsoluteContentSize
+                FloatingWrap.Size = UDim2.new(0, math.ceil(sz.X) + FloatingBarBaseWidth, 0, FloatingBarHeight)
+            end)
+        end
     end
 
     --// Window Table \\--
@@ -9826,53 +9926,122 @@ function Library:CreateWindow(WindowInfo)
 
         Icon = Library:GetCustomIcon(Icon)
         do
-            TabButton = New("TextButton", {
-                BackgroundColor3 = "MainColor",
-                BackgroundTransparency = 1,
-                Size = UDim2.new(1, 0, 0, 40),
-                Text = "",
-                LayoutOrder = Order,
-                Parent = Tabs,
-            })
-            local ButtonPadding = New("UIPadding", {
-                PaddingBottom = UDim.new(0, IsCompact and 6 or 11),
-                PaddingLeft = UDim.new(0, IsCompact and 6 or 12),
-                PaddingRight = UDim.new(0, IsCompact and 6 or 12),
-                PaddingTop = UDim.new(0, IsCompact and 6 or 11),
-                Parent = TabButton,
-            })
+            if IsFloatingTabs then
+                --// Floating pill button — fixed sizes computed from text bounds (no AutomaticSize chains) \\--
+                local HPadding = 14
+                local IconSize = Icon and 15 or 0
+                local IconGap = Icon and 6 or 0
 
-            TabLabel = New("TextLabel", {
-                BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(30, 0),
-                Size = UDim2.new(1, -30, 1, 0),
-                Text = Name,
-                TextSize = 16,
-                TextTransparency = 0.5,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Visible = not IsCompact,
-                Parent = TabButton,
-            })
+                local FontRef = (typeof(Library.Scheme.Font) == "Font" and Library.Scheme.Font)
+                    or Font.fromEnum(Enum.Font.Code)
 
-            if Icon then
-                TabIcon = New("ImageLabel", {
-                    Image = Icon.Url,
-                    ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
-                    ImageRectOffset = Icon.ImageRectOffset,
-                    ImageRectSize = Icon.ImageRectSize,
-                    ImageTransparency = 0.5,
-                    ScaleType = Enum.ScaleType.Fit,
-                    Size = UDim2.fromScale(1, 1),
-                    SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY,
+                local BoundsX = 0
+                local ok, x = pcall(function()
+                    return Library:GetTextBounds(Name, FontRef, 14, 10000)
+                end)
+                if ok and typeof(x) == "number" then
+                    BoundsX = x
+                else
+                    BoundsX = #Name * 8
+                end
+
+                local ButtonWidth = math.ceil(BoundsX) + IconSize + IconGap + (HPadding * 2)
+
+                TabButton = New("TextButton", {
+                    BackgroundColor3 = "MainColor",
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(0, ButtonWidth, 1, 0),
+                    Text = "",
+                    LayoutOrder = Order,
+                    ZIndex = 11,
+                    Parent = FloatingButtonRow,
+                })
+
+                if Icon then
+                    TabIcon = New("ImageLabel", {
+                        Image = Icon.Url,
+                        ImageColor3 = Icon.Custom and "WhiteColor" or "FontColor",
+                        ImageRectOffset = Icon.ImageRectOffset,
+                        ImageRectSize = Icon.ImageRectSize,
+                        ImageTransparency = 0.55,
+                        BackgroundTransparency = 1,
+                        AnchorPoint = Vector2.new(0, 0.5),
+                        Position = UDim2.new(0, HPadding, 0.5, 0),
+                        Size = UDim2.fromOffset(IconSize, IconSize),
+                        ScaleType = Enum.ScaleType.Fit,
+                        ZIndex = 12,
+                        Parent = TabButton,
+                    })
+                end
+
+                TabLabel = New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    AnchorPoint = Vector2.new(0, 0.5),
+                    Position = UDim2.new(0, HPadding + IconSize + IconGap, 0.5, 0),
+                    Size = UDim2.new(1, -(HPadding * 2 + IconSize + IconGap), 1, 0),
+                    Text = Name,
+                    TextSize = 14,
+                    TextTransparency = 0.55,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextYAlignment = Enum.TextYAlignment.Center,
+                    ZIndex = 12,
                     Parent = TabButton,
                 })
-            end
 
-            table.insert(Library.TabButtons, {
-                Label = TabLabel,
-                Padding = ButtonPadding,
-                Icon = TabIcon,
-            })
+                table.insert(Library.TabButtons, {
+                    Label = TabLabel,
+                    Padding = nil,
+                    Icon = TabIcon,
+                })
+            else
+                TabButton = New("TextButton", {
+                    BackgroundColor3 = "MainColor",
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 40),
+                    Text = "",
+                    LayoutOrder = Order,
+                    Parent = Tabs,
+                })
+                local ButtonPadding = New("UIPadding", {
+                    PaddingBottom = UDim.new(0, IsCompact and 6 or 11),
+                    PaddingLeft = UDim.new(0, IsCompact and 6 or 12),
+                    PaddingRight = UDim.new(0, IsCompact and 6 or 12),
+                    PaddingTop = UDim.new(0, IsCompact and 6 or 11),
+                    Parent = TabButton,
+                })
+
+                TabLabel = New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(30, 0),
+                    Size = UDim2.new(1, -30, 1, 0),
+                    Text = Name,
+                    TextSize = 16,
+                    TextTransparency = 0.5,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    Visible = not IsCompact,
+                    Parent = TabButton,
+                })
+
+                if Icon then
+                    TabIcon = New("ImageLabel", {
+                        Image = Icon.Url,
+                        ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
+                        ImageRectOffset = Icon.ImageRectOffset,
+                        ImageRectSize = Icon.ImageRectSize,
+                        ImageTransparency = 0.5,
+                        ScaleType = Enum.ScaleType.Fit,
+                        Size = UDim2.fromScale(1, 1),
+                        SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY,
+                        Parent = TabButton,
+                    })
+                end
+
+                table.insert(Library.TabButtons, {
+                    Label = TabLabel,
+                    Padding = ButtonPadding,
+                    Icon = TabIcon,
+                })
+            end
 
             --// Tab Canvas \\--
             TabCanvas = New("CanvasGroup", {
@@ -10877,17 +11046,46 @@ function Library:CreateWindow(WindowInfo)
             return Tab:AddGroupbox({ Side = 2, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
         end
 
+        local FloatingInactiveTransparency = IsFloatingTabs and 0.55 or 0.5
+        local FloatingHoverTransparency = IsFloatingTabs and 0.25 or 0.25
+
+        local function MoveFloatingIndicatorToButton(animate)
+            if not (IsFloatingTabs and FloatingIndicator and FloatingWrap) then return end
+            local barPos = FloatingWrap.AbsolutePosition
+            local btnPos = TabButton.AbsolutePosition
+            local btnSize = TabButton.AbsoluteSize
+            local relX = math.floor(btnPos.X - barPos.X + 0.5)
+            local width = math.floor(btnSize.X + 0.5)
+            if width <= 0 then
+                -- Layout hasn't computed yet (e.g., window still hidden). The AbsolutePosition /
+                -- AbsoluteSize listeners on this button will fire once dimensions settle and
+                -- re-invoke this function then.
+                return
+            end
+            FloatingIndicator.Visible = true
+            local goal = {
+                Position = UDim2.new(0, relX, 0.5, 0),
+                Size = UDim2.new(0, width, 1, -10),
+            }
+            if animate then
+                TweenService:Create(FloatingIndicator, Library.TabTransitionInfo or Library.TweenInfo, goal):Play()
+            else
+                FloatingIndicator.Position = goal.Position
+                FloatingIndicator.Size = goal.Size
+            end
+        end
+
         function Tab:Hover(Hovering)
             if Library.ActiveTab == Tab then
                 return
             end
 
             TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = Hovering and 0.25 or 0.5,
+                TextTransparency = Hovering and FloatingHoverTransparency or FloatingInactiveTransparency,
             }):Play()
             if TabIcon then
                 TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = Hovering and 0.25 or 0.5,
+                    ImageTransparency = Hovering and FloatingHoverTransparency or FloatingInactiveTransparency,
                 }):Play()
             end
         end
@@ -10901,16 +11099,31 @@ function Library:CreateWindow(WindowInfo)
                 Library.ActiveTab:Hide()
             end
 
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0,
-            }):Play()
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0,
-            }):Play()
-            if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0,
+            if IsFloatingTabs then
+                Library.ActiveTab = Tab
+                MoveFloatingIndicatorToButton(true)
+                TweenService:Create(TabLabel, Library.TweenInfo, {
+                    TextTransparency = 0,
+                    TextColor3 = Library.Scheme.BackgroundColor,
                 }):Play()
+                if TabIcon then
+                    TweenService:Create(TabIcon, Library.TweenInfo, {
+                        ImageTransparency = 0,
+                        ImageColor3 = Library.Scheme.BackgroundColor,
+                    }):Play()
+                end
+            else
+                TweenService:Create(TabButton, Library.TweenInfo, {
+                    BackgroundTransparency = 0,
+                }):Play()
+                TweenService:Create(TabLabel, Library.TweenInfo, {
+                    TextTransparency = 0,
+                }):Play()
+                if TabIcon then
+                    TweenService:Create(TabIcon, Library.TweenInfo, {
+                        ImageTransparency = 0,
+                    }):Play()
+                end
             end
 
             if Description then
@@ -10928,18 +11141,29 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:Hide()
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 1,
-            }):Play()
-
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0.5,
-            }):Play()
-
-            if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0.5,
+            if IsFloatingTabs then
+                TweenService:Create(TabLabel, Library.TweenInfo, {
+                    TextTransparency = FloatingInactiveTransparency,
+                    TextColor3 = Library.Scheme.FontColor,
                 }):Play()
+                if TabIcon then
+                    TweenService:Create(TabIcon, Library.TweenInfo, {
+                        ImageTransparency = FloatingInactiveTransparency,
+                        ImageColor3 = Library.Scheme.FontColor,
+                    }):Play()
+                end
+            else
+                TweenService:Create(TabButton, Library.TweenInfo, {
+                    BackgroundTransparency = 1,
+                }):Play()
+                TweenService:Create(TabLabel, Library.TweenInfo, {
+                    TextTransparency = 0.5,
+                }):Play()
+                if TabIcon then
+                    TweenService:Create(TabIcon, Library.TweenInfo, {
+                        ImageTransparency = 0.5,
+                    }):Play()
+                end
             end
 
             Library:PlayTabAnimation(TabCanvas, false)
@@ -11010,6 +11234,16 @@ function Library:CreateWindow(WindowInfo)
         end
 
         --// Execution \\--
+        if IsFloatingTabs then
+            local function ReflowIfActive()
+                if Library.ActiveTab == Tab then
+                    MoveFloatingIndicatorToButton(false)
+                end
+            end
+            TabButton:GetPropertyChangedSignal("AbsolutePosition"):Connect(ReflowIfActive)
+            TabButton:GetPropertyChangedSignal("AbsoluteSize"):Connect(ReflowIfActive)
+        end
+
         if not Library.ActiveTab then
             Tab:Show()
         end
