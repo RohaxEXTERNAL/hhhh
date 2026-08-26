@@ -250,6 +250,10 @@ local Library = {
     CantDragForced = false,
     DraggableElements = {},
 
+    MobileButtons = nil,
+    MobileButtonStyle = {},
+    MobileToggleTapMode = 1,
+
     --// Signals \\--
     Signals = {},
     UnloadSignals = {},
@@ -2112,7 +2116,11 @@ function Library:AddDraggableButton(...)
 
     local DraggableButton = {
         Connections = {},
-        Destroyed = false
+        Destroyed = false,
+        TapMode = Library.MobileToggleTapMode or 1,
+        _lastTap = -1,
+        _tapCount = 0,
+        _textTransparency = 0,
     }
 
     local Button = New("TextButton", {
@@ -2122,22 +2130,21 @@ function Library:AddDraggableButton(...)
         ZIndex = 10,
         Parent = ScreenGui,
     })
-    table.insert(
-        Library.Corners,
-        New("UICorner", {
-            CornerRadius = UDim.new(0, Library.CornerRadius),
+    local Corner = New("UICorner", {
+        CornerRadius = UDim.new(0, Library.CornerRadius),
+        Parent = Button,
+    })
+    table.insert(Library.Corners, Corner)
+
+    local ButtonScale
+    if not ExcludeScaling then
+        ButtonScale = New("UIScale", {
             Parent = Button,
         })
-    )
-    if not ExcludeScaling then
-        table.insert(
-            Library.Scales,
-            New("UIScale", {
-                Parent = Button,
-            })
-        )
+        table.insert(Library.Scales, ButtonScale)
     end
-    Library:AddOutline(Button)
+
+    local OutlineStroke, ShadowStroke = Library:AddOutline(Button)
 
     local DragThreshold = if ExcludeDragging then 0.25 else math.huge
     Button.InputBegan:Connect(function(Input: InputObject)
@@ -2158,12 +2165,31 @@ function Library:AddDraggableButton(...)
                 return
             end
 
-            Library:SafeCallback(Func, DraggableButton)
-
             if Changed and Changed.Connected then
                 Changed:Disconnect()
                 Changed = nil
             end
+
+            if DraggableButton.TapMode and DraggableButton.TapMode >= 2 then
+                local Now = tick()
+                if Now - DraggableButton._lastTap > 0.45 then
+                    DraggableButton._tapCount = 0
+                end
+                DraggableButton._tapCount = DraggableButton._tapCount + 1
+                DraggableButton._lastTap = Now
+
+                if DraggableButton._tapCount < DraggableButton.TapMode then
+                    task.spawn(function()
+                        Button.TextTransparency = 0.1
+                        task.wait(0.15)
+                        Button.TextTransparency = DraggableButton._textTransparency
+                    end)
+                    return
+                end
+                DraggableButton._tapCount = 0
+            end
+
+            Library:SafeCallback(Func, DraggableButton)
         end)
     end)
 
@@ -2174,7 +2200,42 @@ function Library:AddDraggableButton(...)
         Button.Size = UDim2.fromOffset(X * 2, Y * 2)
     end
 
-    Library:MakeDraggable(Button, Button, true)
+    function DraggableButton:SetTransparency(Transparency: number)
+        local t = math.clamp(Transparency or 0, 0, 1)
+        Button.BackgroundTransparency = t
+        DraggableButton._textTransparency = math.clamp(t + 0.3, 0, 1)
+        Button.TextTransparency = DraggableButton._textTransparency
+        if OutlineStroke then OutlineStroke.Transparency = t end
+        if ShadowStroke then ShadowStroke.Transparency = t end
+    end
+
+    function DraggableButton:SetScale(Scale: number)
+        if ButtonScale then
+            ButtonScale.Scale = math.clamp(Scale or 1, 0.25, 3)
+        end
+    end
+
+    function DraggableButton:SetCornerRadius(Radius: number)
+        if Corner then
+            Corner.CornerRadius = UDim.new(0, math.clamp(Radius or 0, 0, 24))
+        end
+    end
+
+    function DraggableButton:SetTextSize(TextSize: number)
+        Button.TextSize = math.clamp(TextSize or 16, 8, 64)
+    end
+
+    function DraggableButton:SetVisible(Visible: boolean)
+        Button.Visible = Visible == true
+    end
+
+    function DraggableButton:GetButton()
+        return Button
+    end
+
+    -- Lock-aware drag: the Lock button disables dragging for the main window AND for
+    -- these buttons so mobile players cannot move anything while locked.
+    Library:MakeDraggable(Button, Button, true, true)
     DraggableButton:SetText(Text)
     DraggableButton.Button = Button
 
@@ -2204,6 +2265,29 @@ function Library:AddDraggableButton(...)
     end
 
     return DraggableButton
+end
+
+function Library:SetMobileToggleTapMode(Mode: number)
+    Library.MobileToggleTapMode = Mode == 2 and 2 or 1
+    if Library.MobileButtons and Library.MobileButtons.Toggle then
+        Library.MobileButtons.Toggle.TapMode = Library.MobileToggleTapMode
+    end
+end
+
+function Library:ApplyMobileButtonStyle(Style)
+    Library.MobileButtonStyle = typeof(Style) == "table" and Style or {}
+    Library.MobileButtonStyle.Applied = true
+
+    local Style = Library.MobileButtonStyle
+    if not Library.MobileButtons then return end
+
+    for _, Button in ipairs({ Library.MobileButtons.Toggle, Library.MobileButtons.Lock }) do
+        if not Button then continue end
+        if Style.Transparency ~= nil then Button:SetTransparency(Style.Transparency) end
+        if Style.Scale ~= nil then Button:SetScale(Style.Scale) end
+        if Style.CornerRadius ~= nil then Button:SetCornerRadius(Style.CornerRadius) end
+        if Style.Visible ~= nil then Button:SetVisible(Style.Visible) end
+    end
 end
 
 function Library:AddDraggableMenu(Name: string)
@@ -12281,11 +12365,14 @@ function Library:CreateWindow(WindowInfo)
         local ToggleButton = Library:AddDraggableButton("Toggle", function()
             Library:Toggle()
         end, true, true)
+        ToggleButton.TapMode = Library.MobileToggleTapMode or 1
 
         local LockButton = Library:AddDraggableButton("Lock", function(self)
             Library.CantDragForced = not Library.CantDragForced
             self:SetText(Library.CantDragForced and "Unlock" or "Lock")
         end, true, true)
+
+        Library.MobileButtons = { Toggle = ToggleButton, Lock = LockButton }
 
         if WindowInfo.MobileButtonsSide == "Right" then
             ToggleButton.Button.AnchorPoint = Vector2.new(1, 0)
@@ -12305,6 +12392,8 @@ function Library:CreateWindow(WindowInfo)
             ToggleButton.Button.Visible = false
             LockButton.Button.Visible = false
         end
+
+        Library:ApplyMobileButtonStyle(Library.MobileButtonStyle)
     end
 
     --// Execution \\--
